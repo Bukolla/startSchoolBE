@@ -351,14 +351,81 @@ export const viewSchoolClasses = async (
   try {
     const { schoolID } = req.params;
 
-    const schoolClasses = await schoolModel.findById(schoolID).populate({
+    const schoolClasses: any = await schoolModel.findById(schoolID).populate({
       path: "classRooms",
       options: {
         sort: {
           createdAt: -1,
         },
       },
+      populate: {
+        path: "classSubjects",
+      },
     });
+
+    if (!schoolClasses) {
+      return res.status(404).json({
+        message: "School not found",
+        status: 404,
+      });
+    }
+
+    const classrooms: any[] = schoolClasses.classRooms || [];
+    const classroomIDs = classrooms.map((classroom) =>
+      classroom._id.toString()
+    );
+    const referencedSubjectIDs = classrooms.flatMap((classroom) =>
+      (classroom.classSubjects || []).map((subject: any) =>
+        (subject._id || subject).toString()
+      )
+    );
+
+    const linkedSubjects = await subjectModel.find({
+      $or: [
+        { subjectClassID: { $in: classroomIDs } },
+        { subjectClassIDs: { $in: classroomIDs } },
+        { classID: { $in: classroomIDs } },
+        { class: { $in: classroomIDs } },
+        { "classDetails._id": { $in: classroomIDs } },
+        { _id: { $in: referencedSubjectIDs } },
+      ],
+    });
+
+    for (const classroom of classrooms) {
+      const classroomID = classroom._id.toString();
+      const subjectMap = new Map<string, any>();
+
+      for (const subject of classroom.classSubjects || []) {
+        subjectMap.set(subject._id.toString(), subject);
+      }
+
+      for (const subject of linkedSubjects) {
+        const classDetails = subject.classDetails as
+          | { _id?: Types.ObjectId | string }
+          | undefined;
+        const linkedClassIDs = [
+          subject.subjectClassID?.toString(),
+          subject.subjectClassIDs?.toString(),
+          subject.classID?.toString(),
+          subject.class?.toString(),
+          classDetails?._id?.toString(),
+        ];
+
+        if (
+          linkedClassIDs.includes(classroomID) ||
+          referencedSubjectIDs.includes(subject._id.toString()) &&
+            (classroom.classSubjects || []).some(
+              (classSubject: any) =>
+                (classSubject._id || classSubject).toString() ===
+                subject._id.toString()
+            )
+        ) {
+          subjectMap.set(subject._id.toString(), subject);
+        }
+      }
+
+      classroom.classSubjects = [...subjectMap.values()];
+    }
 
     return res.status(200).json({
       message: "School classes found",
@@ -404,7 +471,7 @@ export const viewClassRM = async (
   try {
     const { classID } = req.params;
 
-    const schoolClasses = await classroomModel.findById(classID).populate({
+    const schoolClasses: any = await classroomModel.findById(classID).populate({
       path: "classSubjects",
       populate: [
         {
@@ -415,6 +482,37 @@ export const viewClassRM = async (
         },
       ],
     });
+
+    if (!schoolClasses) {
+      return res.status(404).json({
+        message: "School class not found",
+        status: 404,
+      });
+    }
+
+    const linkedSubjects: any[] = await subjectModel
+      .find({
+        $or: [
+          { subjectClassID: classID },
+          { subjectClassIDs: classID },
+          { classID },
+          { class: classID },
+          { "classDetails._id": classID },
+        ],
+      })
+      .populate("examination")
+      .populate("midTest")
+      .sort({ createdAt: -1 });
+
+    const subjectsByID = new Map<string, any>();
+    for (const subject of [
+      ...(schoolClasses.classSubjects || []),
+      ...linkedSubjects,
+    ]) {
+      subjectsByID.set(subject._id.toString(), subject);
+    }
+
+    schoolClasses.classSubjects = [...subjectsByID.values()];
 
     return res.status(200).json({
       message: "School classes info found",

@@ -15,68 +15,84 @@ export const createSchoolSubject = async (
 ): Promise<Response> => {
   try {
     const { schoolID } = req.params;
-    const { designated, subjectTeacherName, subjectTitle } = req.body;
+    const { classID, designated, subjectTeacherName } = req.body;
+    const subjectTitle =
+      typeof req.body.subjectTitle === "string"
+        ? req.body.subjectTitle.trim()
+        : "";
 
-    const school = await schoolModel.findById(schoolID).populate({
-      path: "classRooms",
-    });
+    if (!subjectTitle) {
+      return res.status(400).json({
+        message: "Subject title is required",
+        status: 400,
+      });
+    }
 
-    const schoolSubj = await schoolModel.findById(schoolID).populate({
-      path: "subjects",
-    });
+    const school = await schoolModel.findById(schoolID);
+    if (!school || !school.schoolName || school.status !== "school-admin") {
+      return res.status(404).json({
+        message: "unable to read school",
+        status: 404,
+      });
+    }
 
-    const getClassRooms: any = school?.classRooms.find((el: any) => {
-      return el.className === designated;
-    });
-
-    const getClassRoomsSubj = schoolSubj?.subjects.some((el: any) => {
-      return el.subjectTitle === subjectTitle && el.designated === designated;
-    });
-
-    const getClassRM = await classroomModel.findById(getClassRooms?._id);
-
-    if (getClassRooms) {
-      if (school && school.schoolName && school.status === "school-admin") {
-        if (!getClassRoomsSubj) {
-          const subjects = await subjectModel.create({
-            schoolName: school.schoolName,
-            subjectTeacherName,
-            subjectTitle,
-            designated,
-            classDetails: getClassRooms,
-            subjectClassID: getClassRM?._id,
-            subjectClassIDs: getClassRooms?._id,
-          });
-
-          school.subjects.push(new Types.ObjectId(subjects._id));
-          school.save();
-
-          getClassRM?.classSubjects.push(new Types.ObjectId(subjects._id));
-          getClassRM?.save();
-
-          return res.status(201).json({
-            message: "subjects created successfully",
-            data: subjects,
-            status: 201,
-          });
-        } else {
-          return res.status(404).json({
-            message: "duplicate subject",
-            status: 404,
-          });
-        }
-      } else {
-        return res.status(404).json({
-          message: "unable to read school",
-          status: 404,
+    const classroom = classID
+      ? await classroomModel.findOne({ _id: classID, schoolIDs: schoolID })
+      : await classroomModel.findOne({
+          schoolIDs: schoolID,
+          className: designated,
         });
-      }
-    } else {
+
+    if (!classroom) {
       return res.status(404).json({
         message: "Error finding school classroom",
         status: 404,
       });
     }
+
+    const classroomID = classroom._id.toString();
+    const linkedSubjects = await subjectModel
+      .find({
+        $or: [
+          { subjectClassID: classroomID },
+          { subjectClassIDs: classroomID },
+          { _id: { $in: classroom.classSubjects } },
+        ],
+      })
+      .select("subjectTitle");
+
+    const isDuplicate = linkedSubjects.some(
+      (subject) =>
+        subject.subjectTitle?.trim().toLowerCase() ===
+        subjectTitle.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      return res.status(409).json({
+        message: "duplicate subject",
+        status: 409,
+      });
+    }
+
+    const subjects = await subjectModel.create({
+      schoolName: school.schoolName,
+      subjectTeacherName,
+      subjectTitle,
+      designated: classroom.className,
+      classDetails: classroom,
+      subjectClassID: classroom._id,
+      subjectClassIDs: classroom._id,
+    });
+
+    school.subjects.push(new Types.ObjectId(subjects._id));
+    classroom.classSubjects.push(new Types.ObjectId(subjects._id));
+    await Promise.all([school.save(), classroom.save()]);
+
+    return res.status(201).json({
+      message: "subjects created successfully",
+      data: subjects,
+      status: 201,
+    });
   } catch (error) {
     return res.status(404).json({
       message: "Error creating school session",

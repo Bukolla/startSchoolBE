@@ -68,7 +68,7 @@ app.use(
       "https://justnext-dev.netlify.app",
       "https://just-next.web.app",
     ],
-  })
+  }),
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -93,7 +93,7 @@ app.use(
     },
 
     store,
-  })
+  }),
 );
 
 mainApp(app);
