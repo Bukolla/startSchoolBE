@@ -479,31 +479,20 @@ export const readSubjectExamination = async (
         presentSession = normalize(school?.presentSession || "");
     }
 
-    // Filter by status and pick the most relevant active exam.
-    // Older/newer students may not have the current class metadata, so avoid
-    // hiding a valid exam just because the class/session metadata is stale.
+    // A student should only receive an exam for the school's exact current term
+    // and session. Missing metadata must not make an old exam eligible.
     const allExams: any[] = lodash.filter(subject?.examination, {
       status: "examination",
     });
 
     const matchesCurrentTerm = (e: any) =>
-      !presentTerm || normalize(e?.term || "") === presentTerm;
+      !!presentTerm && normalize(e?.term || "") === presentTerm;
     const matchesCurrentSession = (e: any) =>
-      !presentSession || normalize(e?.session || "") === presentSession;
+      !!presentSession && normalize(e?.session || "") === presentSession;
 
-    let exam: any = allExams.find(
+    const exam: any = allExams.find(
       (e: any) => matchesCurrentTerm(e) && matchesCurrentSession(e)
     );
-
-    if (!exam) {
-      exam = allExams.find(
-        (e: any) => matchesCurrentTerm(e) || matchesCurrentSession(e)
-      );
-    }
-
-    if (!exam && allExams.length > 0) {
-      exam = allExams[0];
-    }
 
     return res.status(201).json({
       message: "subject exam read successfully",

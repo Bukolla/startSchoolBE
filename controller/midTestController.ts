@@ -721,31 +721,20 @@ export const readSubjectMidTest = async (
         presentSession = normalize(school?.presentSession || "");
     }
 
-    // Filter by status and choose the most relevant active mid-test.
-    // This avoids hiding valid tests for older/newer student records that may have
-    // stale or missing term/session metadata on the class/school model.
+    // A student should only receive a mid-test for the school's exact current
+    // term and session. Missing metadata must not make an old test eligible.
     const allMidTests: any[] = lodash.filter(subject?.midTest, {
       status: "midTest",
     });
 
     const matchesCurrentTerm = (m: any) =>
-      !presentTerm || normalize(m?.term || "") === presentTerm;
+      !!presentTerm && normalize(m?.term || "") === presentTerm;
     const matchesCurrentSession = (m: any) =>
-      !presentSession || normalize(m?.session || "") === presentSession;
+      !!presentSession && normalize(m?.session || "") === presentSession;
 
-    let midTest: any = allMidTests.find(
+    const midTest: any = allMidTests.find(
       (m: any) => matchesCurrentTerm(m) && matchesCurrentSession(m)
     );
-
-    if (!midTest) {
-      midTest = allMidTests.find(
-        (m: any) => matchesCurrentTerm(m) || matchesCurrentSession(m)
-      );
-    }
-
-    if (!midTest && allMidTests.length > 0) {
-      midTest = allMidTests[0];
-    }
 
     return res.status(201).json({
       message: "subject midTest read successfully",

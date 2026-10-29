@@ -635,47 +635,110 @@ export const updateSchoolClassTeacher = async (
 ): Promise<Response> => {
   try {
     const { schoolID, classID } = req.params;
-    const { classTeacherName } = req.body;
+    const classTeacherName =
+      typeof req.body.classTeacherName === "string"
+        ? req.body.classTeacherName.trim()
+        : "";
 
     const school = await schoolModel.findById(schoolID);
-    const getTeacher = await staffModel.findOne({
-      staffName: classTeacherName,
+    const classroom = await classroomModel.findOne({
+      _id: classID,
+      schoolIDs: schoolID,
     });
 
     if (school && school.schoolName && school.status === "school-admin") {
-      if (getTeacher) {
-        const subjects = await classroomModel.findByIdAndUpdate(
-          classID,
-          {
-            classTeacherName,
-            teacherID: getTeacher._id,
-          },
-          { new: true }
-        );
-
-        await staffModel.findByIdAndUpdate(
-          getTeacher._id,
-          {
-            classesAssigned: [
-              ...getTeacher?.classesAssigned,
-              { className: subjects?.className!, classID },
-            ],
-            presentClassID: classID,
-          },
-          { new: true }
-        );
-
-        return res.status(201).json({
-          message: "class teacher updated successfully",
-          data: subjects,
-          status: 201,
+      if (!classroom) {
+        return res.status(404).json({
+          message: "unable to find classroom",
+          status: 404,
         });
-      } else {
+      }
+
+      const currentTeacher = classroom.teacherID
+        ? await staffModel.findOne({
+            _id: classroom.teacherID,
+            schoolIDs: schoolID,
+          })
+        : classroom.classTeacherName
+          ? await staffModel.findOne({
+              staffName: classroom.classTeacherName,
+              schoolIDs: schoolID,
+            })
+          : null;
+
+      const nextTeacher = classTeacherName
+        ? await staffModel.findOne({
+            staffName: classTeacherName,
+            schoolIDs: schoolID,
+          })
+        : null;
+
+      if (classTeacherName && !nextTeacher) {
         return res.status(404).json({
           message: "unable to find school Teacher",
           status: 404,
         });
       }
+
+      if (currentTeacher) {
+        const remainingClasses = (currentTeacher.classesAssigned || []).filter(
+          (assignedClass: any) =>
+            String(assignedClass?.classID) !== String(classID)
+        );
+        const currentTeacherSet: Record<string, unknown> = {
+          classesAssigned: remainingClasses,
+        };
+        const currentTeacherUpdate: Record<string, unknown> = {
+          $set: currentTeacherSet,
+        };
+
+        if (String(currentTeacher.presentClassID) === String(classID)) {
+          if (remainingClasses.length > 0) {
+            currentTeacherSet.presentClassID = remainingClasses[0].classID;
+          } else {
+            currentTeacherUpdate.$unset = { presentClassID: 1 };
+          }
+        }
+
+        await staffModel.findByIdAndUpdate(currentTeacher._id, currentTeacherUpdate);
+      }
+
+      const updatedClassroom = await classroomModel.findByIdAndUpdate(
+        classID,
+        {
+          classTeacherName: nextTeacher ? classTeacherName : "",
+          teacherID: nextTeacher ? String(nextTeacher._id) : "",
+        },
+        { new: true }
+      );
+
+      if (nextTeacher) {
+        const assignedClasses = (nextTeacher.classesAssigned || []).filter(
+          (assignedClass: any) =>
+            String(assignedClass?.classID) !== String(classID)
+        );
+        assignedClasses.push({
+          className: classroom.className,
+          classID: String(classID),
+        });
+
+        await staffModel.findByIdAndUpdate(
+          nextTeacher._id,
+          {
+            classesAssigned: assignedClasses,
+            presentClassID: String(classID),
+          },
+          { new: true }
+        );
+      }
+
+      return res.status(201).json({
+        message: nextTeacher
+          ? "class teacher updated successfully"
+          : "class teacher removed successfully",
+        data: updatedClassroom,
+        status: 201,
+      });
     } else {
       return res.status(404).json({
         message: "unable to read school",

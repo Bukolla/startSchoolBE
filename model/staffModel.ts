@@ -19,7 +19,7 @@ interface iStaff {
   staffAvatarID: string;
   enrollmentID: string;
   activeStatus: boolean;
-  classesAssigned: [];
+  classesAssigned: Array<{ className?: string; classID?: string }>;
 
   facebookAcct: string;
   instagramAcct: string;
