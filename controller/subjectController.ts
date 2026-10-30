@@ -420,25 +420,59 @@ export const deleteSchoolSubject = async (
 ): Promise<Response> => {
   try {
     const { schoolID, subjectID } = req.params;
-    const school: any = await schoolModel.findById(schoolID);
+    const school = await schoolModel.findById(schoolID);
 
     if (school && school.schoolName && school.status === "school-admin") {
-      const subjects = await subjectModel.findById(subjectID);
-      // const subjects = await subjectModel.findByIdAndDelete(subjectID);
+      const isSchoolSubject = (school.subjects || []).some(
+        (schoolSubject: any) =>
+          String(schoolSubject?._id || schoolSubject) === subjectID
+      );
+      const subject = isSchoolSubject
+        ? await subjectModel.findById(subjectID)
+        : null;
 
-      const classRM: any = await classroomModel.findById(
-        subjects?.classDetails
+      if (!subject) {
+        return res.status(404).json({
+          message: "Subject not found in this school",
+          status: 404,
+        });
+      }
+
+      school.subjects = (school.subjects || []).filter(
+        (schoolSubject: any) =>
+          String(schoolSubject?._id || schoolSubject) !== subjectID
       );
 
-      school?.subjects?.pull(new Types.ObjectId(subjects?._id!));
-      school.save();
+      const teachers = await staffModel.find({ schoolIDs: schoolID });
+      const teacherUpdates = teachers
+        .filter((teacher) =>
+          (teacher.subjectAssigned || []).some(
+            (assignment: any) =>
+              String(assignment?.id || assignment?._id) === subjectID
+          )
+        )
+        .map((teacher) => {
+          teacher.subjectAssigned = (teacher.subjectAssigned || []).filter(
+            (assignment: any) =>
+              String(assignment?.id || assignment?._id) !== subjectID
+          );
+          return teacher.save();
+        });
 
-      classRM?.classSubjects?.pull(new Types.ObjectId(subjects?._id!));
-      classRM?.save();
+      await Promise.all([
+        school.save(),
+        classroomModel.updateMany(
+          { schoolIDs: schoolID },
+          { $pull: { classSubjects: subject._id } }
+        ),
+        ...teacherUpdates,
+      ]);
+
+      await subjectModel.findByIdAndDelete(subject._id);
 
       return res.status(201).json({
-        message: "subjects  deleted successfully",
-        data: subjects,
+        message: "Subject deleted successfully",
+        data: subject,
         status: 201,
       });
     } else {
