@@ -11,6 +11,25 @@ const staffModel_1 = __importDefault(require("../model/staffModel"));
 const classroomModel_1 = __importDefault(require("../model/classroomModel"));
 const csvtojson_1 = __importDefault(require("csvtojson"));
 const node_fs_1 = __importDefault(require("node:fs"));
+const isRecord = (value) => typeof value === "object" && value !== null;
+const getReferenceID = (value) => {
+    if (typeof value === "string" || typeof value === "number") {
+        return String(value);
+    }
+    if (value instanceof mongoose_1.Types.ObjectId) {
+        return value.toString();
+    }
+    if (isRecord(value) && value._id) {
+        return getReferenceID(value._id);
+    }
+    return "";
+};
+const getSubjectAssignmentID = (value) => {
+    if (isRecord(value)) {
+        return getReferenceID(value.id || value._id);
+    }
+    return getReferenceID(value);
+};
 const createSchoolSubject = async (req, res) => {
     try {
         const { schoolID } = req.params;
@@ -266,54 +285,97 @@ exports.updateSchoolSubjectTitle = updateSchoolSubjectTitle;
 const updateSchoolSubjectTeacher = async (req, res) => {
     try {
         const { schoolID, subjectID } = req.params;
-        const { subjectTeacherName } = req.body;
+        const { subjectTeacherID, subjectTeacherName } = req.body;
         const school = await schoolModel_1.default.findById(schoolID);
-        const getTeacher = await staffModel_1.default.findOne({
-            staffName: subjectTeacherName,
-            schoolIDs: schoolID,
-        });
-        if (school && school.schoolName && school.status === "school-admin") {
-            if (getTeacher) {
-                const subjects = await subjectModel_1.default.findByIdAndUpdate(subjectID, {
-                    subjectTeacherName,
-                    teacherID: getTeacher?._id,
-                }, { new: true });
-                const addedData = [
-                    ...getTeacher.subjectAssigned,
-                    {
-                        title: subjects?.subjectTitle,
-                        id: subjects?._id,
-                        classMeant: subjects?.designated,
-                        classID: getTeacher?.presentClassID,
-                    },
-                ];
-                await staffModel_1.default.findByIdAndUpdate(getTeacher._id, {
-                    subjectAssigned: addedData,
-                }, { new: true });
-                return res.status(201).json({
-                    message: "subjects teacher updated successfully",
-                    data: subjects,
-                    status: 201,
-                });
-            }
-            else {
-                return res.status(404).json({
-                    message: "unable to find school Teacher",
-                    status: 404,
-                });
-            }
-        }
-        else {
+        if (!school || !school.schoolName || school.status !== "school-admin") {
             return res.status(404).json({
                 message: "unable to read school",
                 status: 404,
             });
         }
+        const isSchoolSubject = (school.subjects || []).some((schoolSubject) => getReferenceID(schoolSubject) === subjectID);
+        const subject = isSchoolSubject
+            ? await subjectModel_1.default.findById(subjectID)
+            : null;
+        if (!subject) {
+            return res.status(404).json({
+                message: "Subject not found in this school",
+                status: 404,
+            });
+        }
+        const nextTeacher = subjectTeacherID
+            ? await staffModel_1.default.findOne({ _id: subjectTeacherID, schoolIDs: schoolID })
+            : await staffModel_1.default.findOne({ staffName: subjectTeacherName, schoolIDs: schoolID });
+        if (!nextTeacher) {
+            return res.status(404).json({
+                message: "Unable to find school teacher",
+                status: 404,
+            });
+        }
+        const classID = subject.subjectClassID ||
+            subject.subjectClassIDs ||
+            subject.classID ||
+            getReferenceID(isRecord(subject.classDetails) ? subject.classDetails._id : undefined);
+        const classroom = (classID
+            ? await classroomModel_1.default.findOne({ _id: classID, schoolIDs: schoolID })
+            : null) ||
+            (subject.designated
+                ? await classroomModel_1.default.findOne({
+                    schoolIDs: schoolID,
+                    className: subject.designated,
+                })
+                : null);
+        if (!classroom) {
+            return res.status(404).json({
+                message: "Unable to find the subject's classroom",
+                status: 404,
+            });
+        }
+        const currentTeacherID = subject.teacherID?.toString();
+        const currentTeacher = currentTeacherID
+            ? await staffModel_1.default.findOne({
+                _id: currentTeacherID,
+                schoolIDs: schoolID,
+            })
+            : subject.subjectTeacherName
+                ? await staffModel_1.default.findOne({
+                    staffName: subject.subjectTeacherName,
+                    schoolIDs: schoolID,
+                })
+                : null;
+        const subjectAssignmentID = subject._id.toString();
+        const nextAssignments = (nextTeacher.subjectAssigned || []).filter((assignment) => getSubjectAssignmentID(assignment) !== subjectAssignmentID);
+        nextAssignments.push({
+            title: subject.subjectTitle,
+            id: subjectAssignmentID,
+            classMeant: classroom.className,
+            classID: classroom._id.toString(),
+        });
+        if (currentTeacher && String(currentTeacher._id) !== String(nextTeacher._id)) {
+            currentTeacher.subjectAssigned = (currentTeacher.subjectAssigned || []).filter((assignment) => getSubjectAssignmentID(assignment) !== subjectAssignmentID);
+            await currentTeacher.save();
+        }
+        const updatedSubject = await subjectModel_1.default.findByIdAndUpdate(subject._id, {
+            subjectTeacherName: nextTeacher.staffName,
+            teacherID: nextTeacher._id.toString(),
+            subjectClassID: classroom._id.toString(),
+            subjectClassIDs: classroom._id.toString(),
+            classID: classroom._id.toString(),
+            designated: classroom.className,
+        }, { new: true });
+        nextTeacher.subjectAssigned = nextAssignments;
+        await nextTeacher.save();
+        return res.status(201).json({
+            message: "Subject teacher assigned successfully",
+            data: updatedSubject,
+            status: 201,
+        });
     }
     catch (error) {
-        return res.status(404).json({
+        console.error("Error updating school subject teacher:", error);
+        return res.status(500).json({
             message: "Error updating school subject to Teacher",
-            status: 404,
+            status: 500,
         });
     }
 };
